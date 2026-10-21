@@ -22,7 +22,6 @@ ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / '正文.md'
 
 SITE_TITLE = '末世清风'
-TAGLINE = '重生回高考前一个月的陈豆，和他那几个不太靠谱的损友。'
 READ_CPM = 450  # 每分钟阅读字数，用来估计阅读时长
 
 HEAD_RE = re.compile(r'^## 第(\d+)章 · (.+?)\s*$')
@@ -149,8 +148,7 @@ a{ color:inherit; }
   font-size:clamp(3.2rem,13vw,6rem); line-height:1.12; color:var(--ink);
 }
 .mark span{ display:block; }
-.intro{ min-width:0; padding-top:.4rem; display:flex; flex-direction:column; gap:1.1rem; }
-.tagline{ margin:0; font-family:var(--serif); font-size:clamp(1.05rem,3.4vw,1.3rem); line-height:1.8; color:var(--ink-2); max-width:20em; }
+.intro{ min-width:0; align-self:flex-end; display:flex; flex-direction:column; gap:1.1rem; }
 .stats{ margin:0; color:var(--muted); font-size:.9rem; font-variant-numeric:tabular-nums; }
 .cta{
   align-self:flex-start; display:inline-block; text-decoration:none; background:var(--accent); color:var(--accent-ink);
@@ -363,7 +361,6 @@ def render_index(chapters, total_chars, updated, fragment=False):
 <header class="masthead">
 <h1 class="mark" aria-label="%(site)s">%(chars)s</h1>
 <div class="intro">
-<p class="tagline">%(tagline)s</p>
 <p class="stats">已更 %(count)d 章 · 约 %(wan)s 万字</p>
 <a class="cta" id="cta" href="%(first)s">从第一章读起<small>第%(fn)s章　%(ft)s</small></a>
 </div>
@@ -378,7 +375,7 @@ def render_index(chapters, total_chars, updated, fragment=False):
 <footer class="foot"><span>《%(site)s》</span><span>在浏览器里记住你的字号、主题和读到的位置</span></footer>
 </div>
 <script>%(js)s</script>''' % {
-        'site': esc(SITE_TITLE), 'chars': ''.join('<span aria-hidden="true">%s</span>' % esc(c) for c in SITE_TITLE), 'tagline': esc(TAGLINE), 'count': len(chapters), 'wan': wan,
+        'site': esc(SITE_TITLE), 'chars': ''.join('<span aria-hidden="true">%s</span>' % esc(c) for c in SITE_TITLE), 'count': len(chapters), 'wan': wan,
         'updated': esc(updated), 'first': chapter_href(first['n'], False), 'fn': cn_num(first['n']),
         'ft': esc(first['title']), 'rows': '\n'.join(rows), 'js': INDEX_JS}
     return doc(SITE_TITLE, '《%s》连载在线阅读，已更 %d 章。' % (SITE_TITLE, len(chapters)), '', body, fragment=fragment)
