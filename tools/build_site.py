@@ -7,9 +7,12 @@
 
 站点只包含章节正文，不含大纲/设定集/人物表等创作资料。
 新章节只要按 `## 第N章 · 标题` 追加进 正文.md，重新构建就会自动出现。
+章节页自带"编辑模式"（作者在页面上改字，修改只存在本机浏览器，点"提交修改"生成 GitHub Issue），
+配套的反向同步工具见 tools/apply_page_edits.py。
 只用标准库，没有外部依赖。
 """
 import argparse
+import hashlib
 import html
 import math
 import re
@@ -22,6 +25,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / '正文.md'
 
 SITE_TITLE = '末世清风'
+REPO = 'jiangyun577-svg/qingfeng-novel'  # "提交修改"生成的 Issue 发到这个仓库
 READ_CPM = 450  # 每分钟阅读字数，用来估计阅读时长
 
 HEAD_RE = re.compile(r'^## 第(\d+)章 · (.+?)\s*$')
@@ -44,41 +48,60 @@ def cn_num(n):
 # ───────────────────────── 解析 ─────────────────────────
 
 def strip_tail_note(lines):
-    """去掉章节末尾的 `---` 和 `> ...` 备注块（正文.md 里 1-11 章与后续新章之间的说明）。"""
+    """去掉章节末尾的 `---` 和 `> ...` 备注块（正文.md 里 1-11 章与后续新章之间的说明）。
+    lines 是 (行号, 原文) 的列表。"""
     k = len(lines)
-    while k and (not lines[k - 1].strip() or lines[k - 1].lstrip().startswith('>')):
+    while k and (not lines[k - 1][1].strip() or lines[k - 1][1].lstrip().startswith('>')):
         k -= 1
-    if k and lines[k - 1].strip() == '---':
+    if k and lines[k - 1][1].strip() == '---':
         k -= 1
     return lines[:k]
+
+
+def para_hash(text):
+    return hashlib.sha1(text.encode('utf-8')).hexdigest()[:8]
+
+
+def para_ids(paras):
+    """给一章里的每个 'p' 段落一个稳定编号：正文哈希前 8 位；同一章里完全相同的段落，第 2 个起加 ~序号。
+    编辑模式和 tools/apply_page_edits.py 都用它来定位段落，行号变了也不影响。"""
+    seen, out = {}, []
+    for kind, t, _ln in paras:
+        if kind != 'p':
+            continue
+        h = para_hash(t)
+        k = seen.get(h, 0)
+        seen[h] = k + 1
+        out.append(h if k == 0 else '%s~%d' % (h, k))
+    return out
 
 
 def parse_chapters(text):
     chapters = []
     cur = None
-    for line in text.split('\n'):
+    for ln, line in enumerate(text.split('\n'), 1):
         m = HEAD_RE.match(line)
         if m:
             cur = {'n': int(m.group(1)), 'title': m.group(2), 'lines': []}
             chapters.append(cur)
         elif cur is not None:
-            cur['lines'].append(line)
+            cur['lines'].append((ln, line))
     for expected, ch in enumerate(chapters, 1):
         if ch['n'] != expected:
             sys.exit('章号不连续：第%d个章节标题写的是第%d章' % (expected, ch['n']))
         paras = []
-        for raw in strip_tail_note(ch['lines']):
+        for ln, raw in strip_tail_note(ch['lines']):
             s = raw.strip()
             if not s:
                 continue
-            paras.append(('scene', '') if SCENE_RE.match(s) else ('p', s))
+            paras.append(('scene', '', ln) if SCENE_RE.match(s) else ('p', s, ln))
         # 章首章尾的场景分隔线不显示
         while paras and paras[0][0] == 'scene':
             paras.pop(0)
         while paras and paras[-1][0] == 'scene':
             paras.pop()
         ch['paras'] = paras
-        ch['chars'] = sum(len(re.sub(r'\s', '', t)) for k, t in paras if k == 'p')
+        ch['chars'] = sum(len(re.sub(r'\s', '', t)) for k, t, _ln in paras if k == 'p')
         ch['minutes'] = max(1, math.ceil(ch['chars'] / READ_CPM))
         del ch['lines']
     return chapters
@@ -213,6 +236,29 @@ a{ color:inherit; }
 @media (prefers-reduced-motion:no-preference){
   .row, .btn, .cta{ transition:background-color .15s, border-color .15s, filter .15s; }
 }
+
+/* 编辑模式（作者用）：默认关闭，在 Aa 面板里开启；修改只存在本机，提交后由 Claude 同步进 正文.md */
+.panel .hint{ margin:0; font-size:.76rem; line-height:1.5; color:var(--muted); }
+.editing .text p{ cursor:text; }
+.editing .text p:not(.x){ box-shadow:inset 2px 0 0 var(--rule); padding-left:.4em; }
+.text p.edited{ background:var(--accent-soft); border-radius:3px; box-shadow:inset 2px 0 0 var(--accent); }
+.ed{ margin:0 0 .9em; }
+.ed textarea{ display:block; width:100%; min-height:6rem; font:inherit; font-size:max(16px, var(--read-size)); line-height:1.8; padding:.6rem .7rem; background:var(--surface); color:var(--ink); border:1px solid var(--accent); border-radius:6px; resize:vertical; }
+.ed-act{ display:flex; gap:8px; margin-top:8px; flex-wrap:wrap; }
+.text .ed-tip, .editing .text .ed-tip{ flex-basis:100%; margin:0; padding:0; text-indent:0; text-align:left; box-shadow:none; cursor:default; font-size:.76rem; line-height:1.5; color:var(--muted); }
+.edbar{ position:fixed; left:0; right:0; bottom:0; z-index:35; background:var(--surface); border-top:1px solid var(--rule-2);
+  padding:10px max(16px, env(safe-area-inset-right, 0px)) calc(10px + env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px));
+  display:flex; gap:8px; align-items:center; flex-wrap:wrap; font-size:.85rem; color:var(--muted); }
+.edbar .grow{ flex:1; min-width:9rem; }
+.edbar .btn{ font-size:.85rem; padding:.4rem .7rem; min-height:2.2rem; }
+.edbar .btn.go{ background:var(--accent); border-color:var(--accent); color:var(--accent-ink); }
+.editing .pager{ margin-bottom:6rem; }
+.edlg{ position:fixed; inset:0; z-index:50; background:rgba(0,0,0,.45); display:flex; align-items:center; justify-content:center; padding:16px; }
+.edlg > div{ background:var(--surface); border:1px solid var(--rule-2); border-radius:10px; padding:16px; width:min(34rem,100%); display:grid; gap:10px; }
+.edlg p{ margin:0; font-size:.85rem; color:var(--ink-2); }
+.edlg textarea{ width:100%; height:12rem; font:inherit; font-size:14px; background:var(--bg); color:var(--ink); border:1px solid var(--rule-2); border-radius:6px; padding:8px; }
+.edtoast{ position:fixed; left:50%; transform:translateX(-50%); bottom:calc(5.5rem + env(safe-area-inset-bottom, 0px)); z-index:60; max-width:min(30rem,92vw);
+  background:var(--ink); color:var(--bg); padding:.6rem .9rem; border-radius:8px; font-size:.85rem; line-height:1.5; }
 '''
 
 # 在内容绘制前应用阅读偏好（主题 / 字体 / 字号），避免闪一下
@@ -307,6 +353,182 @@ CHAPTER_JS = r'''
 })();
 '''
 
+EDIT_JS = r'''
+(function(){
+  var REPO=document.body.getAttribute('data-repo'), ch=+document.body.getAttribute('data-ch');
+  var text=document.querySelector('.text'), btn=document.getElementById('ed'), bar=document.getElementById('edbar');
+  if(!text||!btn||!bar)return;
+  var info=document.getElementById('edinfo'), ps=[].slice.call(text.querySelectorAll('p[data-h]'));
+  var HEAD=12, BUDGET=7000, opened=null;
+  ps.forEach(function(p){p._o=p.textContent});
+  function load(){var d=QF.get('edits',{});return d&&typeof d==='object'&&!Array.isArray(d)?d:{}}
+  function store(d){QF.set('edits',d)}
+  function K(id){return ch+':'+id}
+  function segs(v){return v.split(/\r?\n/).map(function(s){return s.trim()}).filter(Boolean)}
+  function cps(s){return Array.from(s)}
+  function diff(o,n){
+    var a=cps(o),b=cps(n),m=Math.min(a.length,b.length),p=0,s=0;
+    while(p<m&&a[p]===b[p])p++;
+    while(s<m-p&&a[a.length-1-s]===b[b.length-1-s])s++;
+    return [p,s,b.slice(p,b.length-s).join('')];
+  }
+  function toast(t,ms){
+    var e=document.getElementById('edtoast');
+    if(!e){e=document.createElement('div');e.id='edtoast';e.className='edtoast';e.setAttribute('role','status');document.body.appendChild(e)}
+    e.textContent=t;e.hidden=false;clearTimeout(e._t);e._t=setTimeout(function(){e.hidden=true},ms||4500);
+  }
+  function pOf(el){
+    var p=el.closest&&el.closest('p'); if(!p)return null;
+    while(p&&!p.hasAttribute('data-h')){p=p.previousElementSibling}
+    return p&&p.hasAttribute('data-h')?p:null;
+  }
+  function paint(){
+    var d=load();
+    [].slice.call(text.querySelectorAll('p.x')).forEach(function(e){e.parentNode.removeChild(e)});
+    var live={};
+    ps.forEach(function(p){
+      var id=p.getAttribute('data-h'),r=d[K(id)];
+      live[K(id)]=1; p.classList.remove('edited');
+      if(!r){p.textContent=p._o;return}
+      var a=r.n===''?[]:r.n.split('\n');
+      p.classList.add('edited');
+      if(!a.length){p.textContent=p._o;p.style.opacity='.45';p.style.textDecoration='line-through';return}
+      p.style.opacity='';p.style.textDecoration='';
+      p.textContent=a[0];
+      var prev=p;
+      for(var i=1;i<a.length;i++){
+        var x=document.createElement('p');x.className='x edited';x.textContent=a[i];
+        prev.parentNode.insertBefore(x,prev.nextSibling);prev=x;
+      }
+    });
+    ps.forEach(function(p){if(!d[K(p.getAttribute('data-h'))]){p.style.opacity='';p.style.textDecoration=''}});
+    status(d,live);
+  }
+  function status(d,live){
+    var all=Object.keys(d),mine=0,orph=0;
+    all.forEach(function(k){var r=d[k];if(r.ch===ch){mine++;if(!live[k])orph++}});
+    var t=all.length?('共 '+all.length+' 处修改（本章 '+mine+' 处）'):'点任意一段开始修改';
+    info.textContent=t;
+    if(orph){
+      var b=document.createElement('button');b.type='button';b.className='btn';b.textContent='清除 '+orph+' 条找不到原文的草稿';
+      b.addEventListener('click',function(){var e=load();Object.keys(e).forEach(function(k){if(e[k].ch===ch&&!live[k])delete e[k]});store(e);paint()});
+      info.appendChild(document.createTextNode('　'));info.appendChild(b);
+    }
+  }
+  function closeEd(){
+    if(!opened)return;
+    var box=opened.box,p=opened.p;
+    if(box.parentNode)box.parentNode.removeChild(box);
+    p.hidden=false;
+    var x=p.nextElementSibling;
+    while(x&&x.classList.contains('x')){x.hidden=false;x=x.nextElementSibling}
+    opened=null;paint();
+  }
+  function openEd(p){
+    closeEd();
+    var d=load(),id=p.getAttribute('data-h'),r=d[K(id)],cur=r?r.n:p._o;
+    var box=document.createElement('div');box.className='ed';
+    var ta=document.createElement('textarea');ta.value=cur;ta.lang='zh';ta.setAttribute('aria-label','编辑这一段');
+    var act=document.createElement('div');act.className='ed-act';
+    function mk(label,cls,fn){var b=document.createElement('button');b.type='button';b.className='btn '+cls;b.textContent=label;b.addEventListener('click',fn);act.appendChild(b);return b}
+    mk('保存','go',save);
+    mk('取消','',closeEd);
+    mk('恢复原文','',function(){var e=load();delete e[K(id)];store(e);closeEd()});
+    var tip=document.createElement('p');tip.className='ed-tip';tip.textContent='回车 = 另起一段；留空保存 = 删除这一段。Ctrl/⌘+回车保存，Esc 取消。';act.appendChild(tip);
+    box.appendChild(ta);box.appendChild(act);
+    p.hidden=true;var x=p.nextElementSibling;while(x&&x.classList.contains('x')){x.hidden=true;x=x.nextElementSibling}
+    p.parentNode.insertBefore(box,p);
+    opened={p:p,box:box};
+    function fit(){ta.style.height='auto';ta.style.height=Math.max(96,ta.scrollHeight+4)+'px'}
+    ta.addEventListener('input',fit);
+    ta.addEventListener('keydown',function(e){
+      if(e.key==='Escape'){e.stopPropagation();closeEd()}
+      else if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();save()}
+      else e.stopPropagation();
+    });
+    fit();ta.focus();ta.setSelectionRange(ta.value.length,ta.value.length);
+    function save(){
+      var a=segs(ta.value),n=a.join('\n'),e=load();
+      if(n===p._o){delete e[K(id)];store(e);closeEd();return}
+      if(!n&&!confirm('内容为空，要把这一段整段删除吗？（提交后会从正文里删掉）'))return;
+      var df=n?diff(p._o,n):[0,0,null];
+      e[K(id)]={ch:ch,i:+p.getAttribute('data-i'),id:id,head:cps(p._o).slice(0,HEAD).join(''),n:n,d:df};
+      store(e);closeEd();
+    }
+  }
+  function setEdit(on){
+    QF.prefs.edit=!!on;QF.save();
+    text.classList.toggle('editing',!!on);document.body.classList.toggle('editing',!!on);
+    bar.hidden=!on;btn.setAttribute('aria-pressed',String(!!on));btn.textContent=on?'关闭':'开启';
+    if(!on)closeEd();
+  }
+  btn.addEventListener('click',function(){setEdit(!QF.prefs.edit)});
+  text.addEventListener('click',function(e){
+    if(!QF.prefs.edit||e.target.closest('.ed'))return;
+    var sel=window.getSelection&&window.getSelection().toString();if(sel)return;
+    var p=pOf(e.target);if(p)openEd(p);
+  });
+  function list(){
+    var d=load(),a=Object.keys(d).map(function(k){return d[k]});
+    a.sort(function(x,y){return x.ch-y.ch||x.i-y.i});return a;
+  }
+  function mkBody(a,readable){
+    var e=a.map(function(r){return [r.ch,r.i,r.id,r.d[0],r.d[1],r.d[2],r.head]});
+    var lines=['<!-- qingfeng-page-edits v1 -->','【页面修改】共 '+a.length+' 处。下次开会话时由 Claude 同步进《正文.md》（tools/apply_page_edits.py）。',''];
+    if(readable){
+      a.forEach(function(r){
+        var cut=function(s){s=cps(s);return s.length>14?s.slice(0,14).join('')+'…':s.join('')};
+        var del=r.d[2]===null,mid=del?'':r.d[2].replace(/\n/g,'⏎');
+        lines.push('- 第'+r.ch+'章第'+r.i+'段「'+r.head+'…」'+(del?'：删除整段':(r.d[0]+r.d[1]===0?'：整段改写':'：改动处 → 「'+cut(mid)+'」')));
+      });
+      lines.push('');
+    }
+    lines.push('```json',JSON.stringify({qf:1,e:e}),'```');
+    return lines.join('\n');
+  }
+  function copyText(t){
+    if(navigator.clipboard&&navigator.clipboard.writeText)return navigator.clipboard.writeText(t);
+    return new Promise(function(res,rej){
+      try{var ta=document.createElement('textarea');ta.value=t;ta.style.position='fixed';ta.style.opacity='0';document.body.appendChild(ta);ta.select();
+        var ok=document.execCommand('copy');document.body.removeChild(ta);ok?res():rej()}catch(x){rej(x)}
+    });
+  }
+  function dialog(t){
+    var o=document.createElement('div');o.className='edlg';
+    o.innerHTML='<div><p>没能自动复制。请手动全选下面的内容复制，然后贴给 Claude，或贴进 GitHub 的新 Issue。</p><textarea readonly></textarea><div class="ed-act"><button type="button" class="btn go">关闭</button></div></div>';
+    o.querySelector('textarea').value=t;
+    o.querySelector('button').addEventListener('click',function(){document.body.removeChild(o)});
+    document.body.appendChild(o);var ta=o.querySelector('textarea');ta.focus();ta.select();
+  }
+  function today(){var d=new Date();return d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2)+'-'+('0'+d.getDate()).slice(-2)}
+  document.getElementById('ed-sub').addEventListener('click',function(){
+    var a=list();if(!a.length){toast('还没有修改。点任意一段就能改。');return}
+    var title='【页面修改】'+today()+' 共'+a.length+'处';
+    var base='https://github.com/'+REPO+'/issues/new?title='+encodeURIComponent(title);
+    var full=mkBody(a,true),mini=mkBody(a,false);
+    var url=base+'&body='+encodeURIComponent(full);
+    if(url.length>BUDGET)url=base+'&body='+encodeURIComponent(mini);
+    if(url.length<=BUDGET){
+      window.open(url,'_blank','noopener');
+      toast('已打开 GitHub 的新 Issue 页：确认内容后点 Submit new issue 即提交。');
+      return;
+    }
+    window.open(base,'_blank','noopener');
+    copyText(mini).then(function(){toast('修改较多，超出链接长度：内容已复制，请粘贴到刚打开的 Issue 正文框再提交。',9000)},function(){dialog(mini)});
+  });
+  document.getElementById('ed-copy').addEventListener('click',function(){
+    var a=list();if(!a.length){toast('还没有修改。');return}
+    var t=mkBody(a,true);
+    copyText(t).then(function(){toast('已复制 '+a.length+' 处修改，贴给 Claude 即可。')},function(){dialog(t)});
+  });
+  document.getElementById('ed-clr').addEventListener('click',function(){
+    var d=load();if(!Object.keys(d).length){toast('没有草稿。');return}
+    if(confirm('清除本机所有未同步的修改草稿？（已经提交并同步进正文之后再清除）')){store({});closeEd();paint()}
+  });
+  paint();setEdit(!!QF.prefs.edit);
+})();
+'''
+
 FAVICON = ("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E"
            "%3Crect width='32' height='32' rx='6' fill='%235A3E9E'/%3E"
            "%3Cpath d='M6 12h13a3 3 0 1 0-3-3M5 17h19a3 3 0 1 1-3 3M8 23h9' fill='none' stroke='%23fff' "
@@ -384,8 +606,14 @@ def render_index(chapters, total_chars, updated, fragment=False):
 def render_chapter(ch, prev, nxt, total, home_href):
     n = ch['n']
     parts = []
-    for kind, t in ch['paras']:
-        parts.append('<hr class="scene">' if kind == 'scene' else '<p>%s</p>' % esc(t))
+    ids = iter(para_ids(ch['paras']))
+    idx = 0
+    for kind, t, _ln in ch['paras']:
+        if kind == 'scene':
+            parts.append('<hr class="scene">')
+        else:
+            idx += 1
+            parts.append('<p data-i="%d" data-h="%s">%s</p>' % (idx, next(ids), esc(t)))
     if prev:
         pl = '<a class="prev" rel="prev" href="%s"><span class="l">← 上一章</span><span class="t">第%s章　%s</span></a>' % (
             '%02d.html' % prev['n'], cn_num(prev['n']), esc(prev['title']))
@@ -406,6 +634,8 @@ def render_chapter(ch, prev, nxt, total, home_href):
 <div class="line"><span>字号</span><span class="grp"><button class="btn" id="sz-" type="button" aria-label="减小字号">A−</button><button class="btn" id="sz+" type="button" aria-label="增大字号">A+</button></span></div>
 <div class="line"><span>字体</span><span class="grp"><button class="btn" id="f-sans" type="button" aria-pressed="true">黑体</button><button class="btn" id="f-serif" type="button" aria-pressed="false">宋体</button></span></div>
 <div class="line"><span>主题</span><span class="grp"><button class="btn" id="t-auto" type="button" aria-pressed="true">自动</button><button class="btn" id="t-light" type="button" aria-pressed="false">日间</button><button class="btn" id="t-dark" type="button" aria-pressed="false">夜间</button></span></div>
+<div class="line"><span>编辑（作者用）</span><span class="grp"><button class="btn" id="ed" type="button" aria-pressed="false">开启</button></span></div>
+<p class="hint">开启后点任意一段就能改字。修改只保存在这台设备的浏览器里，点“提交修改”才会发给作者。</p>
 </div>
 </span>
 </header>
@@ -419,12 +649,18 @@ def render_chapter(ch, prev, nxt, total, home_href):
 </main>
 <nav class="pager" aria-label="章节导航">%(pl)s%(pr)s</nav>
 <footer class="foot wrap"><span>《%(site)s》</span><a href="%(home)s">回到目录</a></footer>
+<div class="edbar" id="edbar" hidden>
+<span class="grow" id="edinfo">点任意一段开始修改</span>
+<button class="btn go" id="ed-sub" type="button">提交修改</button>
+<button class="btn" id="ed-copy" type="button">复制</button>
+<button class="btn" id="ed-clr" type="button" title="清除本机所有未同步的修改草稿">清除</button>
+</div>
 <script>%(js)s</script>''' % {
         'home': home_href, 'cn': cn_num(n), 'title': esc(ch['title']), 'chars': format(ch['chars'], ','),
-        'min': ch['minutes'], 'text': '\n'.join(parts), 'pl': pl, 'pr': pr, 'site': esc(SITE_TITLE), 'js': CHAPTER_JS}
+        'min': ch['minutes'], 'text': '\n'.join(parts), 'pl': pl, 'pr': pr, 'site': esc(SITE_TITLE), 'js': CHAPTER_JS + EDIT_JS}
     t = '第%s章 %s · %s' % (cn_num(n), ch['title'], SITE_TITLE)
     return doc(t, '《%s》第%s章 %s' % (SITE_TITLE, cn_num(n), ch['title']), '', body,
-               body_attrs='data-ch="%d" data-total="%d"' % (n, total))
+               body_attrs='data-ch="%d" data-total="%d" data-repo="%s"' % (n, total, esc(REPO)))
 
 
 # ───────────────────────── 输出 ─────────────────────────
