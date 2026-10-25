@@ -4,6 +4,10 @@
 用法：
     python3 tools/build_site.py                 # 输出到 site/，可直接发布到 GitHub Pages
     python3 tools/build_site.py --artifact      # 另外输出 site_artifact/，供 Artifact 预览用
+    python3 tools/build_site.py --upto 20       # 只发布到第20章（不写就读 tools/publish_upto.txt）
+
+tools/publish_upto.txt 里写一个数字 N，站点就只发布第1到第N章，后面写好但还不想公开的章节留在 正文.md 里不上线；
+文件不存在或为空，就发布全部章节。
 
 站点只包含章节正文，不含大纲/设定集/人物表等创作资料。
 新章节只要按 `## 第N章 · 标题` 追加进 正文.md，重新构建就会自动出现。
@@ -23,6 +27,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / '正文.md'
+UPTO_FILE = ROOT / 'tools' / 'publish_upto.txt'  # 只发布到第几章，见文件头说明
 
 SITE_TITLE = '末世清风'
 REPO = 'jiangyun577-svg/qingfeng-novel'  # "提交修改"生成的 Issue 发到这个仓库
@@ -670,10 +675,27 @@ def write(path, text):
     path.write_text(text, encoding='utf-8')
 
 
-def build(out, fragment_index=False, home_for_chapters='../index.html'):
+def publish_upto():
+    """读 tools/publish_upto.txt 里的章号；没有这个文件或内容为空就返回 None（全部发布）。"""
+    if not UPTO_FILE.exists():
+        return None
+    s = UPTO_FILE.read_text(encoding='utf-8').strip()
+    if not s:
+        return None
+    if not s.isdigit():
+        sys.exit('tools/publish_upto.txt 里只能写一个章号数字，现在是：%r' % s)
+    return int(s)
+
+
+def build(out, fragment_index=False, home_for_chapters='../index.html', upto=None):
     chapters = parse_chapters(SRC.read_text(encoding='utf-8'))
     if not chapters:
         sys.exit('正文.md 里没有找到 `## 第N章 · 标题`')
+    if upto is not None:
+        held = [c for c in chapters if c['n'] > upto]
+        chapters = [c for c in chapters if c['n'] <= upto]
+        if held:
+            print('暂不发布：' + '、'.join('第%d章' % c['n'] for c in held))
     total_chars = sum(c['chars'] for c in chapters)
     updated = last_update()
     out.mkdir(parents=True, exist_ok=True)
@@ -694,7 +716,9 @@ if __name__ == '__main__':
     ap.add_argument('--out', default=str(ROOT / 'site'))
     ap.add_argument('--artifact', action='store_true', help='另外生成 site_artifact/（首页为片段，章节页回目录用 ARTIFACT_HOME）')
     ap.add_argument('--artifact-home', default='../index.html', help='Artifact 预览里章节页"回目录"的链接')
+    ap.add_argument('--upto', type=int, default=None, help='只发布到第几章；不写就读 tools/publish_upto.txt')
     a = ap.parse_args()
-    build(Path(a.out))
+    upto = a.upto if a.upto is not None else publish_upto()
+    build(Path(a.out), upto=upto)
     if a.artifact:
-        build(ROOT / 'site_artifact', fragment_index=True, home_for_chapters=a.artifact_home)
+        build(ROOT / 'site_artifact', fragment_index=True, home_for_chapters=a.artifact_home, upto=upto)
