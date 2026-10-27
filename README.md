@@ -143,7 +143,7 @@
 作者要一个能发给朋友看的在线阅读站（只放章节正文，不放大纲/设定等创作资料）。实现：`tools/build_site.py` 把 `正文.md` 切成静态页面（目录页 + 每章一页，自带阅读设置：字号 / 黑体宋体 / 日间夜间，浏览器里记住读到哪一章）；页面带 `noindex`，不让搜索引擎收录，只靠链接传阅。
 
 - **本地构建**：`python3 tools/build_site.py`，输出到 `site/`（用浏览器打开 `site/index.html` 即可看）。加 `--artifact` 会另生成 `site_artifact/`（给 Artifact 预览用的单文件片段，同样不提交；之前发布的 Artifact 预览停在 11 章，已过期，不是正式站）。
-- **只发布到第几章**：看 `tools/publish_upto.txt` 里的数字（现在是 20）；临时覆盖可用 `python3 tools/build_site.py --upto 20`。
+- **只发布到第几章**：看 `tools/publish_upto.txt` 里的数字（现在是 21）；临时覆盖可用 `python3 tools/build_site.py --upto 20`。
 - **上线（GitHub Pages）**：作者账号是免费版，私有仓库不能用 Pages（作者的截图提示"Upgrade or make this repository public"）。**2026-10-21 作者决定把本仓库设为公开**，并表示大纲、设定集、人物表、草稿等创作资料随之公开、朋友也能看到都可以接受；已提醒过提交记录里含作者的 Gmail 地址，公开后别人可见。设为公开后还要作者在网页上做：Settings → Pages → Source 选 **GitHub Actions**；之后把开发分支合并到 `main`（Pages 默认只从默认分支发布），`.github/workflows/pages.yml` 会自动构建发布，以后 main 每有新提交就重新发布。云端会话里 `gh` 令牌无效、GitHub REST 接口被代理拦截、也没有修改仓库设置的工具，所以"设为公开"和"开启 Pages"必须作者在网页上操作；**不要向作者索要令牌**。合并到 `main` 前先确认作者已完成这两步并说"合并"。**状态（2026-10-21）：已完成**——作者已设为公开、Source 选了 GitHub Actions，`main` 已推送，站点已上线并经作者确认能打开（https://jiangyun577-svg.github.io/qingfeng-novel/）。此后往 `main` 推送就会自动重新发布（公开站点，推送前按作者当次指示办）。
 - **没开通时的临时预览**：用 Artifact 发布过一个预览（链接见作者与会话的对话；只有作者本人能打开，是临时方案，不是长期地址）。
 - **首页不放简介句**：作者要求删除"重生回高考前一个月的陈豆……"那一行，不要加回来。首页的按钮是"从第一章读起"（有阅读记录时多一个"继续阅读"）。
